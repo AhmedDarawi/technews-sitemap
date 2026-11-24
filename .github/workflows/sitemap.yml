@@ -1,0 +1,89 @@
+name: Update Tech News Sitemap
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Blogger sitemap
+        run: curl -fsSL https://www.technews-eg.com/sitemap.xml -o raw-sitemap.xml
+
+      - name: Build corrected sitemap
+        run: |
+          python3 - <<'PY'
+          import re
+          from datetime import date
+
+          SITE = "https://www.technews-eg.com"
+          STATIC = [
+              "/",
+              "/p/about.html",
+              "/p/editorial-policy.html",
+              "/p/privacy-policy.html",
+              "/p/contact.html",
+              "/p/advertise.html",
+              "/p/disclaimer.html",
+          ]
+
+          with open("raw-sitemap.xml", "r", encoding="utf-8") as f:
+              source = f.read()
+
+          entries = []
+          seen = set()
+          pattern = re.compile(
+              r"<url>\s*<loc>(.*?)</loc>\s*<lastmod>(.*?)</lastmod>\s*</url>", re.S
+          )
+          for match in pattern.finditer(source):
+              loc = match.group(1).replace(" ", "%20")
+              if loc in seen:
+                  continue
+              seen.add(loc)
+              entries.append((loc, match.group(2)))
+
+          today = date.today().isoformat()
+          for path in STATIC:
+              loc = SITE + path
+              if loc not in seen:
+                  seen.add(loc)
+                  entries.append((loc, today))
+
+          lines = "\n".join(
+              f"<url><loc>{loc}</loc><lastmod>{lastmod}</lastmod></url>"
+              for loc, lastmod in entries
+          )
+          output = (
+              '<?xml version="1.0" encoding="UTF-8"?>\n'
+              '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+              + lines
+              + "\n</urlset>\n"
+          )
+          with open("sitemap.xml", "w", encoding="utf-8", newline="\n") as f:
+              f.write(output)
+
+          print(f"Built sitemap with {len(entries)} URLs")
+          PY
+
+      - name: Remove temporary file
+        run: rm -f raw-sitemap.xml
+
+      - name: Commit sitemap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sitemap.xml
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Auto-update sitemap $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push
+          fi
